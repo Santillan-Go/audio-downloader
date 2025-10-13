@@ -11,21 +11,11 @@ import {
   CheckIcon,
 } from "@heroicons/react/20/solid";
 
-import { Response, ResponseType, fetch } from "@tauri-apps/api/http";
+import { Response, ResponseType, fetch } from "../../http.web";
 import { useState } from "react";
-import { startDrag } from "@crabnebula/tauri-plugin-drag";
 
 import * as wav from "node-wav";
-import {
-  checkFileExists,
-  createPlaceholder,
-  writeSampleFile,
-  downloadFile,
-} from "../../native";
-import { path, fs } from "@tauri-apps/api";
-import { downloadDir } from "@tauri-apps/api/path";
-
-import { cfg } from "../../config";
+import { downloadFile } from "../../native.web";
 import { SamplePlaybackContext } from "../playback";
 import { SpliceTag } from "../../splice/entities";
 import { SpliceSample } from "../../splice/api";
@@ -37,7 +27,7 @@ const getChordTypeDisplay = (type: string | null) =>
 export type TagClickHandler = (tag: SpliceTag) => void;
 
 /**
- * Provides a view describing a Splice sample.
+ * Provides a view describing a Splice sample (Web version).
  */
 export default function SampleListEntry({
   sample,
@@ -94,7 +84,7 @@ export default function SampleListEntry({
       setFgLoading(false);
 
       audio.src = URL.createObjectURL(
-        new Blob([decodedSample! as any], {
+        new Blob([new Uint8Array(decodedSample!)], {
           type: "audio/mpeg",
         })
       );
@@ -118,54 +108,29 @@ export default function SampleListEntry({
   }
 
   async function handleDownload() {
+    console.log("Starting download...");
     setDownloading(true);
     setDownloadSuccess(false);
 
     try {
-      console.log("Starting download...");
       await ensureAudioDecoded();
       console.log("Audio decoded successfully");
 
-      // Get system Downloads folder
-      const downloadsPath = await downloadDir();
-      console.log("Downloads path:", downloadsPath);
+      // Create a clean filename for web download
+      const cleanPackName = sanitizePath(pack.name);
+      const cleanSampleName = sanitizePath(
+        sample.name.split("/").pop() || "sample"
+      );
+      const cleanFileName = `${cleanPackName} - ${cleanSampleName}.wav`;
 
-      // Create a clean filename: just the base sample name
-      const baseSampleName = sample.name.split("/").pop() || sample.name; // Get just the filename part
-      const cleanFileName = `${sanitizePath(pack.name)} - ${sanitizePath(
-        baseSampleName
-      )}.wav`;
-      console.log("Base sample name:", baseSampleName);
       console.log("Clean filename:", cleanFileName);
 
-      const fullPath = await path.join(downloadsPath, cleanFileName);
-      console.log("Full path:", fullPath);
-
-      // Check if file already exists
-      if (await fs.exists(fullPath)) {
-        console.log("File already exists, showing success");
-        // File already exists, show success immediately
-        setDownloading(false);
-        setDownloadSuccess(true);
-        setTimeout(() => setDownloadSuccess(false), 2000);
-        return;
-      }
-
-      console.log("Processing audio...");
       // Process the audio
       const actx = new AudioContext();
-      const audioBuffer =
-        decodedSample!.buffer instanceof ArrayBuffer
-          ? decodedSample!.buffer
-          : new ArrayBuffer(decodedSample!.buffer.byteLength);
-      const samples = await actx.decodeAudioData(audioBuffer);
-      console.log(
-        "Audio context decoded, channels:",
-        samples.numberOfChannels,
-        "sample rate:",
-        samples.sampleRate
-      );
-
+      // Convert to a proper ArrayBuffer
+      const arrayBuffer = new ArrayBuffer(decodedSample!.byteLength);
+      new Uint8Array(arrayBuffer).set(decodedSample!);
+      const samples = await actx.decodeAudioData(arrayBuffer);
       const channels: Float32Array[] = [];
 
       if (samples.length < 60 * 44100) {
@@ -184,104 +149,35 @@ export default function SampleListEntry({
         }
       }
 
-      console.log("Encoding to WAV...");
-      // Encode as WAV and download directly to Downloads folder
+      // Encode as WAV and trigger browser download
       const wavBuffer = (wav.encode as any)(channels, {
         bitDepth: 16,
         sampleRate: samples.sampleRate,
       });
-      console.log("WAV encoded, buffer size:", wavBuffer.length);
 
-      console.log("Saving file...");
-      // Save directly to Downloads folder - downloadFile expects baseDir and relativePath
-      await downloadFile(downloadsPath, cleanFileName, Buffer.from(wavBuffer));
-      console.log("File saved successfully!");
+      console.log("Triggering download...");
+
+      // Trigger browser download
+      await downloadFile("", cleanFileName, Buffer.from(wavBuffer));
 
       // Show success message
       setDownloadSuccess(true);
       setTimeout(() => setDownloadSuccess(false), 2000);
+
+      console.log("Download completed successfully");
     } catch (error) {
       console.error("Download failed:", error);
-      // Also show the error in an alert for debugging
-      alert(`Download failed: ${error}`);
     } finally {
       setDownloading(false);
     }
   }
 
-  const sanitizePath = (x: string) => x.replace(/[<>:"|?* ]/g, "_");
+  const sanitizePath = (x: string) => x.replace(/[<>:"|?* /\\\\]/g, "_");
 
-  async function handleDrag(ev: React.MouseEvent<HTMLDivElement, MouseEvent>) {
-    // Verify that the parent of the element that we began the dragging from
-    // is not explicitly marked as non-draggable (as it may be clicked etc.)
-    const dragOrigin = document.elementFromPoint(
-      ev.clientX,
-      ev.clientY
-    )?.parentElement;
-    if (dragOrigin != null && dragOrigin.dataset.draggable === "false") {
-      return;
-    }
-
-    const samplePath =
-      sanitizePath(pack.name) + "/" + sanitizePath(sample.name);
-
-    const dragParams = {
-      item: [await path.join(cfg().sampleDir, samplePath)],
-      icon: "",
-    };
-
-    setFgLoading(true);
-    await ensureAudioDecoded();
-
-    if (!(await checkFileExists(cfg().sampleDir, samplePath))) {
-      if (cfg().placeholders) {
-        await createPlaceholder(cfg().sampleDir, samplePath);
-        startDrag(dragParams);
-      }
-
-      const actx = new AudioContext();
-
-      const audioBuffer =
-        decodedSample!.buffer instanceof ArrayBuffer
-          ? decodedSample!.buffer
-          : new ArrayBuffer(decodedSample!.buffer.byteLength);
-      const samples = await actx.decodeAudioData(audioBuffer);
-      const channels: Float32Array[] = [];
-
-      if (samples.length < 60 * 44100) {
-        for (let i = 0; i < samples.numberOfChannels; i++) {
-          const chan = samples.getChannelData(i);
-
-          const start = 1200;
-          const end = (sample.duration / 1000) * samples.sampleRate + start;
-
-          channels.push(chan.subarray(start, end));
-        }
-      } else {
-        // processing big samples may result in memory allocation errors (it sure did for me!!)
-        console.warn(
-          `big boi detected of ${samples.length} samples - not pre-processing!`
-        );
-      }
-
-      await writeSampleFile(
-        cfg().sampleDir,
-        samplePath,
-        (wav.encode as any)(channels, {
-          bitDepth: 16,
-          sampleRate: samples.sampleRate,
-        })
-      );
-
-      if (!cfg().placeholders) {
-        startDrag(dragParams);
-      }
-
-      setFgLoading(false);
-    } else {
-      setFgLoading(false);
-      startDrag(dragParams);
-    }
+  // Remove drag functionality for web version
+  async function handleDrag() {
+    // No drag functionality in web version
+    console.log("Drag functionality not available in web version");
   }
 
   return (
@@ -330,22 +226,16 @@ export default function SampleListEntry({
             )}
           </div>
 
-          <Tooltip
-            content={
-              downloadSuccess ? "Downloaded successfully!" : "Download sample"
-            }
-          >
+          <Tooltip content="Download sample">
             <div
               onClick={handleDownload}
-              className={`cursor-pointer w-8 transition-colors ${
-                downloadSuccess ? "text-green-500" : ""
-              }`}
+              className="cursor-pointer w-8"
               data-draggable="false"
             >
               {downloading ? (
                 <CircularProgress aria-label="Downloading..." className="h-8" />
               ) : downloadSuccess ? (
-                <CheckIcon />
+                <CheckIcon className="text-green-500" />
               ) : (
                 <ArrowDownTrayIcon />
               )}

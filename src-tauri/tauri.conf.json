@@ -27,7 +27,9 @@
         "all": true,
         "scope": [
           "$APPDATA",
-          "$APPDATA/config.json"
+          "$APPDATA/config.json",
+          "$DOWNLOAD",
+          "$DOWNLOAD/**"
         ]
       },
       "path": {
@@ -47,7 +49,7 @@
     },
     "windows": [
       {
-        "title": "Splicedd",
+        "title": "Audio-Downloader",
         "width": 1200,
         "height": 600
       }

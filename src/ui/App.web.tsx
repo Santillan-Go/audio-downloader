@@ -17,9 +17,9 @@ import {
   SelectItem,
   useDisclosure,
 } from "@nextui-org/react";
-import { fetch } from "@tauri-apps/api/http";
+import { fetch } from "../http.web";
 
-import { cfg } from "../config";
+import { cfg } from "../config.web";
 import {
   GRAPHQL_URL,
   SpliceSample,
@@ -28,7 +28,7 @@ import {
   createSearchRequest,
   createSampleByIdRequest,
   extractSampleIdFromUrl,
-} from "../splice/api";
+} from "../splice/api.web";
 import {
   ChordType,
   MusicKey,
@@ -37,10 +37,13 @@ import {
   SpliceTag,
 } from "../splice/entities";
 
-import SampleListEntry from "./components/SampleListEntry";
-import SettingsModalContent from "./components/SettingsModalContent";
-import KeyScaleSelection from "./components/KeyScaleSelection";
-import { SamplePlaybackCancellation, SamplePlaybackContext } from "./playback";
+import SampleListEntry from "../ui/components/SampleListEntry.web";
+import SettingsModalContent from "../ui/components/SettingsModalContent";
+import KeyScaleSelection from "../ui/components/KeyScaleSelection";
+import {
+  SamplePlaybackCancellation,
+  SamplePlaybackContext,
+} from "../ui/playback";
 
 function App() {
   const settings = useDisclosure({
@@ -153,19 +156,17 @@ function App() {
   }
 
   async function updateSearch(newQuery: string, resetPage = false) {
-    console.log("updateSearch called with:", newQuery);
     setSearchLoading(true);
 
     try {
       // Check if the query is a Splice URL
       const sampleId = extractSampleIdFromUrl(newQuery);
-      console.log("Extracted sample ID:", sampleId);
+      console.log("Query:", newQuery, "Extracted ID:", sampleId);
 
       if (sampleId) {
-        console.log("Fetching sample by ID:", sampleId);
         // Fetch single sample by ID
+        console.log("Fetching sample by ID:", sampleId);
         const payload = createSampleByIdRequest(sampleId);
-        console.log("Payload:", payload);
 
         const resp = await fetch<SpliceSampleByIdResponse>(GRAPHQL_URL, {
           method: "POST",
@@ -175,12 +176,11 @@ function App() {
           },
         });
 
-        console.log("Response:", resp);
         pbCtx.cancellation?.(); // stop any sample that's currently playing
 
         if (resp.data.data.asset) {
-          console.log("Sample found:", resp.data.data.asset);
           // Single sample found
+          console.log("Sample found:", resp.data.data.asset);
           setResults([resp.data.data.asset]);
           setResultCount(1);
           setCurrentPage(1);
@@ -190,16 +190,16 @@ function App() {
           setKnownGenres([]);
           setKnownInstruments([]);
         } else {
-          console.log("Sample not found");
           // Sample not found
+          console.log("Sample not found");
           setResults([]);
           setResultCount(0);
           setCurrentPage(0);
           setTotalPages(0);
         }
       } else {
-        console.log("Regular search mode");
         // Regular search
+        console.log("Performing regular search for:", newQuery);
         const payload = createSearchRequest(newQuery);
         payload.variables.sort = sortBy;
         if (sortBy == "random") {
@@ -249,9 +249,9 @@ function App() {
 
         function findConstraints(name: "Genre" | "Instrument") {
           return data.tag_summary
-            .map((x) => x.tag)
-            .filter((x) => x.taxonomy.name == name)
-            .map((x) => ({ name: x.label, uuid: x.uuid }));
+            .map((x: any) => x.tag)
+            .filter((x: any) => x.taxonomy.name == name)
+            .map((x: any) => ({ name: x.label, uuid: x.uuid }));
         }
 
         setKnownGenres(findConstraints("Genre"));
@@ -283,8 +283,8 @@ function App() {
       <div className="flex gap-2">
         <Input
           type="text"
-          aria-label="Search for samples "
-          placeholder="Search for samples ..."
+          aria-label="Search for samples or paste Splice URL"
+          placeholder="Search for samples or paste Splice URL..."
           labelPlacement="outside"
           variant="bordered"
           value={query}

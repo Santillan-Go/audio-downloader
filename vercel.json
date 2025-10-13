@@ -1,0 +1,36 @@
+{
+  "buildCommand": "npm run web:build",
+  "outputDirectory": "dist-web",
+  "devCommand": "npm run web:dev",
+  "installCommand": "npm install",
+  "framework": null,
+  "rewrites": [
+    {
+      "source": "/api/graphql/:path*",
+      "destination": "https://surfaces-graphql.splice.com/graphql/:path*"
+    },
+    {
+      "source": "/api/s3/:path*",
+      "destination": "https://spliceproduction.s3.us-west-1.amazonaws.com/:path*"
+    }
+  ],
+  "headers": [
+    {
+      "source": "/api/(.*)",
+      "headers": [
+        {
+          "key": "Access-Control-Allow-Origin",
+          "value": "*"
+        },
+        {
+          "key": "Access-Control-Allow-Methods",
+          "value": "GET, POST, PUT, DELETE, OPTIONS"
+        },
+        {
+          "key": "Access-Control-Allow-Headers",
+          "value": "Content-Type, Authorization"
+        }
+      ]
+    }
+  ]
+}
