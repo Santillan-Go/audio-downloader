@@ -2,11 +2,11 @@ import { useEffect, useRef, useState } from "react";
 
 import { Button } from "@nextui-org/button";
 import { SearchIcon, ChevronDownIcon } from "@nextui-org/shared-icons";
-import { WrenchIcon } from "@heroicons/react/20/solid";
+// import { WrenchIcon } from "@heroicons/react/20/solid";
 import {
   CircularProgress,
   Input,
-  Modal,
+  // Modal,
   Pagination,
   Popover,
   PopoverContent,
@@ -15,11 +15,11 @@ import {
   RadioGroup,
   Select,
   SelectItem,
-  useDisclosure,
+  // useDisclosure,
 } from "@nextui-org/react";
 import { fetch } from "../http.web";
 
-import { cfg } from "../config.web";
+// import { cfg } from "../config.web";
 import {
   GRAPHQL_URL,
   SpliceSample,
@@ -38,7 +38,7 @@ import {
 } from "../splice/entities";
 
 import SampleListEntry from "../ui/components/SampleListEntry.web";
-import SettingsModalContent from "../ui/components/SettingsModalContent";
+// import SettingsModalContent from "../ui/components/SettingsModalContent";
 import KeyScaleSelection from "../ui/components/KeyScaleSelection";
 import {
   SamplePlaybackCancellation,
@@ -46,9 +46,9 @@ import {
 } from "../ui/playback";
 
 function App() {
-  const settings = useDisclosure({
-    defaultOpen: !cfg().configured,
-  });
+  // const settings = useDisclosure({
+  //   defaultOpen: !cfg().configured,
+  // });
 
   const [bpmType, setBpmType] = useState<"exact" | "range">("exact");
   const [bpm, setBpm] = useState<{
@@ -161,11 +161,11 @@ function App() {
     try {
       // Check if the query is a Splice URL
       const sampleId = extractSampleIdFromUrl(newQuery);
-      console.log("Query:", newQuery, "Extracted ID:", sampleId);
+      // console.log("Query:", newQuery, "Extracted ID:", sampleId);
 
       if (sampleId) {
         // Fetch single sample by ID
-        console.log("Fetching sample by ID:", sampleId);
+        // console.log("Fetching sample by ID:", sampleId);
         const payload = createSampleByIdRequest(sampleId);
 
         const resp = await fetch<SpliceSampleByIdResponse>(GRAPHQL_URL, {
@@ -180,7 +180,7 @@ function App() {
 
         if (resp.data.data.asset) {
           // Single sample found
-          console.log("Sample found:", resp.data.data.asset);
+          // console.log("Sample found:", resp.data.data.asset);
           setResults([resp.data.data.asset]);
           setResultCount(1);
           setCurrentPage(1);
@@ -191,7 +191,7 @@ function App() {
           setKnownInstruments([]);
         } else {
           // Sample not found
-          console.log("Sample not found");
+          // console.log("Sample not found");
           setResults([]);
           setResultCount(0);
           setCurrentPage(0);
@@ -199,7 +199,7 @@ function App() {
         }
       } else {
         // Regular search
-        console.log("Performing regular search for:", newQuery);
+        // console.log("Performing regular search for:", newQuery);
         const payload = createSearchRequest(newQuery);
         payload.variables.sort = sortBy;
         if (sortBy == "random") {
@@ -270,7 +270,7 @@ function App() {
 
   return (
     <main className="flex flex-col gap-2 m-8 h-screen">
-      <Modal
+      {/* <Modal
         size="3xl"
         isDismissable={false}
         hideCloseButton={!cfg().configured}
@@ -278,7 +278,7 @@ function App() {
         onOpenChange={settings.onOpenChange}
       >
         <SettingsModalContent />
-      </Modal>
+      </Modal> */}
 
       <div className="flex gap-2">
         <Input
@@ -308,14 +308,14 @@ function App() {
           <SelectItem key="random">Random</SelectItem>
         </Select>
 
-        <Button
+        {/* <Button
           isIconOnly
           variant="bordered"
           aria-label="Settings"
           onClick={settings.onOpen}
         >
           <WrenchIcon className="w-4" />
-        </Button>
+        </Button> */}
       </div>
 
       <div className="flex gap-2">

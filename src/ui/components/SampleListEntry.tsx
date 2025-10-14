@@ -132,9 +132,13 @@ export default function SampleListEntry({
 
       // Create a clean filename: just the base sample name
       const baseSampleName = sample.name.split("/").pop() || sample.name; // Get just the filename part
+
+      // Remove .wav extension if it already exists, then add it back
+      const nameWithoutExtension = baseSampleName.replace(/\.wav$/i, "");
       const cleanFileName = `${sanitizePath(pack.name)} - ${sanitizePath(
-        baseSampleName
-      )}.wav`;
+        nameWithoutExtension
+      )}`;
+
       console.log("Base sample name:", baseSampleName);
       console.log("Clean filename:", cleanFileName);
 

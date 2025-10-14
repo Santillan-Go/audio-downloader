@@ -108,22 +108,24 @@ export default function SampleListEntry({
   }
 
   async function handleDownload() {
-    console.log("Starting download...");
+    // console.log("Starting download...");
     setDownloading(true);
     setDownloadSuccess(false);
 
     try {
       await ensureAudioDecoded();
-      console.log("Audio decoded successfully");
+      // console.log("Audio decoded successfully");
 
       // Create a clean filename for web download
       const cleanPackName = sanitizePath(pack.name);
-      const cleanSampleName = sanitizePath(
-        sample.name.split("/").pop() || "sample"
-      );
+      const baseSampleName = sample.name.split("/").pop() || "sample";
+
+      // Remove .wav extension if it already exists, then add it back
+      const nameWithoutExtension = baseSampleName.replace(/\.wav$/i, "");
+      const cleanSampleName = sanitizePath(nameWithoutExtension);
       const cleanFileName = `${cleanPackName} - ${cleanSampleName}.wav`;
 
-      console.log("Clean filename:", cleanFileName);
+      // console.log("Clean filename:", cleanFileName);
 
       // Process the audio
       const actx = new AudioContext();
@@ -155,7 +157,7 @@ export default function SampleListEntry({
         sampleRate: samples.sampleRate,
       });
 
-      console.log("Triggering download...");
+      // console.log("Triggering download...");
 
       // Trigger browser download
       await downloadFile("", cleanFileName, Buffer.from(wavBuffer));
@@ -164,7 +166,7 @@ export default function SampleListEntry({
       setDownloadSuccess(true);
       setTimeout(() => setDownloadSuccess(false), 2000);
 
-      console.log("Download completed successfully");
+      // console.log("Download completed successfully");
     } catch (error) {
       console.error("Download failed:", error);
     } finally {
