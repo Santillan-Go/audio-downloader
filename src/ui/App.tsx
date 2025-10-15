@@ -1,539 +1,315 @@
-import { useEffect, useRef, useState } from "react";
-
-import { Button } from "@nextui-org/button";
-import { SearchIcon, ChevronDownIcon } from "@nextui-org/shared-icons";
-import { WrenchIcon } from "@heroicons/react/20/solid";
-import {
-  CircularProgress,
-  Input,
-  Modal,
-  Pagination,
-  Popover,
-  PopoverContent,
-  PopoverTrigger,
-  Radio,
-  RadioGroup,
-  Select,
-  SelectItem,
-  useDisclosure,
-} from "@nextui-org/react";
+import { useEffect, useState } from "react";
 import { fetch } from "@tauri-apps/api/http";
 
-import { cfg } from "../config";
-import {
-  GRAPHQL_URL,
-  SpliceSample,
-  SpliceSearchResponse,
-  SpliceSampleByIdResponse,
-  createSearchRequest,
-  createSampleByIdRequest,
-  extractSampleIdFromUrl,
-} from "../splice/api";
-import {
-  ChordType,
-  MusicKey,
-  SpliceSampleType,
-  SpliceSortBy,
-  SpliceTag,
-} from "../splice/entities";
+import LoginPage from "./components/LoginPage";
+import { AuthenticatedApp } from "./components/AuthenticatedApp";
 
-import SampleListEntry from "./components/SampleListEntry";
-import SettingsModalContent from "./components/SettingsModalContent";
-import KeyScaleSelection from "./components/KeyScaleSelection";
-import { SamplePlaybackCancellation, SamplePlaybackContext } from "./playback";
+// Type definitions for login response
+interface LoginResponse {
+  message: string;
+  user: {
+    id: string;
+    username: string;
+    role: string;
+  };
+  token?: string;
+  accessToken?: string;
+  access_token?: string;
+  authToken?: string;
+}
+
+interface LoginErrorResponse {
+  error?: string;
+  message?: string;
+}
+
+// JWT Token utilities
+interface JWTPayload {
+  exp?: number; // Expiration time (Unix timestamp)
+  iat?: number; // Issued at time
+  sub?: string; // Subject (user ID)
+  [key: string]: any;
+}
+
+// Function to decode JWT token without verification (client-side only for expiration check)
+const decodeJWT = (token: string): JWTPayload | null => {
+  try {
+    // JWT has 3 parts separated by dots: header.payload.signature
+    const parts = token.split(".");
+    if (parts.length !== 3) {
+      console.error("Invalid JWT format");
+      return null;
+    }
+
+    // Decode the payload (second part)
+    const payload = parts[1];
+
+    // Add padding if needed for base64 decoding
+    const paddedPayload = payload + "=".repeat((4 - (payload.length % 4)) % 4);
+
+    // Decode base64
+    const decodedPayload = atob(paddedPayload);
+
+    // Parse JSON
+    return JSON.parse(decodedPayload) as JWTPayload;
+  } catch (error) {
+    console.error("Error decoding JWT:", error);
+    return null;
+  }
+};
+
+// Function to check if token is expired
+const isTokenExpired = (token: string): boolean => {
+  const payload = decodeJWT(token);
+  if (!payload || !payload.exp) {
+    return true; // Consider expired if we can't decode or no expiration
+  }
+
+  const now = Math.floor(Date.now() / 1000); // Current time in seconds
+  return payload.exp < now;
+};
+
+// Function to get token expiration time in milliseconds
+const getTokenExpiration = (token: string): number | null => {
+  const payload = decodeJWT(token);
+  if (!payload || !payload.exp) {
+    return null;
+  }
+
+  return payload.exp * 1000; // Convert to milliseconds
+};
 
 function App() {
-  const settings = useDisclosure({
-    defaultOpen: !cfg().configured,
-  });
+  const [isLogin, setIsLogin] = useState(false);
+  const [authToken, setAuthToken] = useState<string | null>(null);
+  const [tokenExpiry, setTokenExpiry] = useState<number | null>(null);
 
-  const [bpmType, setBpmType] = useState<"exact" | "range">("exact");
-  const [bpm, setBpm] = useState<{
-    minBpm?: number;
-    maxBpm?: number;
-    bpm?: string;
-  }>();
-
-  const [query, setQuery] = useState("");
-
-  const [results, setResults] = useState<SpliceSample[]>([]);
-  const [resultCount, setResultCount] = useState(0);
-  const resultContainer = useRef<HTMLDivElement | null>(null);
-
-  const [queryTimer, setQueryTimer] = useState<NodeJS.Timeout | null>(null);
-
-  const [sortBy, setSortBy] = useState<SpliceSortBy>("relevance");
-  const [sampleType, setSampleType] = useState<SpliceSampleType | "any">("any");
-
-  const [knownInstruments, setKnownInstruments] = useState<
-    { name: string; uuid: string }[]
-  >([]);
-  const [knownGenres, setKnownGenres] = useState<
-    { name: string; uuid: string }[]
-  >([]);
-
-  const [instruments, setInstruments] = useState(new Set<string>([]));
-  const [genres, setGenres] = useState(new Set<string>([]));
-  let [tags, setTags] = useState<SpliceTag[]>([]);
-
-  const [musicKey, setMusicKey] = useState<MusicKey | null>(null);
-  const [chordType, setChordType] = useState<ChordType | null>(null);
-
-  const [totalPages, setTotalPages] = useState(0);
-  const [currentPage, setCurrentPage] = useState(0);
-
-  const [searchLoading, setSearchLoading] = useState(false);
-
+  // Check for valid token on app load
   useEffect(() => {
-    updateSearch(query);
-  }, [
-    sortBy,
-    bpm,
-    bpmType,
-    sampleType,
-    instruments,
-    genres,
-    currentPage,
-    musicKey,
-    chordType,
-  ]);
+    const savedToken = localStorage.getItem("authToken");
+    const savedExpiry = localStorage.getItem("tokenExpiry");
 
-  const [smplCancellation, smplSetCancellation] =
-    useState<SamplePlaybackCancellation | null>(null);
-  const pbCtx: SamplePlaybackContext = {
-    cancellation: smplCancellation,
-    setCancellation: smplSetCancellation,
+    console.log("Checking saved token on app load:", {
+      savedToken: !!savedToken,
+      savedExpiry,
+    });
+
+    if (savedToken) {
+      // First check if token is expired using JWT's built-in expiration
+      if (isTokenExpired(savedToken)) {
+        console.log("Saved token is expired (JWT check), clearing...");
+        localStorage.removeItem("authToken");
+        localStorage.removeItem("tokenExpiry");
+        localStorage.removeItem("userInfo");
+        return;
+      }
+
+      // Get actual expiration time from JWT
+      const jwtExpiration = getTokenExpiration(savedToken);
+
+      if (jwtExpiration) {
+        console.log("Token validation:", {
+          now: Date.now(),
+          jwtExpiration,
+          timeRemaining: jwtExpiration - Date.now(),
+        });
+
+        // Use JWT expiration time
+        setAuthToken(savedToken);
+        setTokenExpiry(jwtExpiration);
+        setIsLogin(true);
+
+        // Update localStorage with correct expiration time
+        localStorage.setItem("tokenExpiry", jwtExpiration.toString());
+
+        console.log("Token is valid, auto-login successful");
+      } else if (savedExpiry) {
+        // Fallback to saved expiry if JWT doesn't have expiration
+        const expiryTime = parseInt(savedExpiry);
+        const now = Date.now();
+
+        if (now < expiryTime) {
+          setAuthToken(savedToken);
+          setTokenExpiry(expiryTime);
+          setIsLogin(true);
+          console.log("Token is valid (fallback check), auto-login successful");
+        } else {
+          console.log("Saved token expired (fallback check), clearing...");
+          localStorage.removeItem("authToken");
+          localStorage.removeItem("tokenExpiry");
+          localStorage.removeItem("userInfo");
+        }
+      }
+    }
+  }, []);
+
+  // Auto-logout when token expires
+  useEffect(() => {
+    if (tokenExpiry) {
+      const now = Date.now();
+      const timeUntilExpiry = tokenExpiry - now;
+
+      if (timeUntilExpiry > 0) {
+        const timer = setTimeout(() => {
+          handleLogout();
+        }, timeUntilExpiry);
+
+        return () => clearTimeout(timer);
+      }
+    }
+  }, [tokenExpiry]);
+
+  // Periodic token validation and countdown update
+  useEffect(() => {
+    if (authToken && isLogin) {
+      const interval = setInterval(() => {
+        // Check JWT expiration first
+        if (isTokenExpired(authToken)) {
+          console.log("Token expired (JWT check), logging out...");
+          handleLogout();
+          return;
+        }
+
+        // Update countdown using JWT expiration or fallback
+        const jwtExpiration = getTokenExpiration(authToken);
+        const expirationTime = jwtExpiration || tokenExpiry;
+
+        if (expirationTime) {
+          const now = Date.now();
+          const remaining = expirationTime - now;
+
+          if (remaining <= 0) {
+            console.log("Token expired (time check), logging out...");
+            handleLogout();
+          } else {
+            // setTimeUntilExpiry(remaining);
+          }
+        }
+      }, 1000); // Check every second for accurate countdown
+
+      return () => clearInterval(interval);
+    } else {
+      //  setTimeUntilExpiry(null);
+    }
+  }, [authToken, isLogin, tokenExpiry]);
+  const handleLogout = () => {
+    setAuthToken(null);
+    setTokenExpiry(null);
+    // setTimeUntilExpiry(null);
+    setIsLogin(false);
+    localStorage.removeItem("authToken");
+    localStorage.removeItem("tokenExpiry");
+    localStorage.removeItem("userInfo");
   };
 
-  function ensureContraintsGathered() {
-    if (knownInstruments.length == 0 || knownGenres.length == 0) {
-      updateSearch("");
-    }
-  }
+  // Helper function to format time remaining
 
-  function changePage(n: number) {
-    setCurrentPage(n);
-    resultContainer.current?.scrollTo({ top: 0, left: 0, behavior: "smooth" });
-  }
-
-  function handleSearchInput(ev: React.ChangeEvent<HTMLInputElement>) {
-    setQuery(ev.target.value);
-
-    if (queryTimer != null) {
-      clearTimeout(queryTimer);
-    }
-
-    // We set a timer, as to not overload Splice with needless requests while the user is typing.
-    let selfTimer = setTimeout(() => updateSearch(ev.target.value, true), 100);
-    setQueryTimer(selfTimer);
-  }
-
-  function handleSearchKeyDown(ev: React.KeyboardEvent<HTMLInputElement>) {
-    if (ev.key == "Enter") {
-      updateSearch(query, true);
-    }
-  }
-
-  function updateTagState(selectedKeys: Set<string>) {
-    tags = tags.filter((x) =>
-      Array.from(selectedKeys).some((y) => x.uuid == y)
-    );
-    setTags(tags);
-    updateSearch(query, true);
-  }
-
-  function handleTagClick(tag: SpliceTag) {
-    if (tags.some((x) => x.uuid == tag.uuid)) {
-      return;
-    }
-
-    tags = [...tags, tag];
-    setTags(tags);
-    updateSearch(query, true);
-  }
-
-  async function updateSearch(newQuery: string, resetPage = false) {
-    console.log("updateSearch called with:", newQuery);
-    setSearchLoading(true);
-
+  const onLogin = async ({
+    username,
+    password,
+  }: {
+    username: string;
+    password: string;
+  }) => {
     try {
-      // Check if the query is a Splice URL
-      const sampleId = extractSampleIdFromUrl(newQuery);
-      console.log("Extracted sample ID:", sampleId);
-
-      if (sampleId) {
-        console.log("Fetching sample by ID:", sampleId);
-        // Fetch single sample by ID
-        const payload = createSampleByIdRequest(sampleId);
-        console.log("Payload:", payload);
-
-        const resp = await fetch<SpliceSampleByIdResponse>(GRAPHQL_URL, {
+      const response = await fetch(
+        "https://apisplice.vipremixer.com/api/v1/login",
+        {
           method: "POST",
           body: {
             type: "Json",
-            payload,
+            payload: { username, password },
           },
-        });
+        }
+      );
 
-        console.log("Response:", resp);
-        pbCtx.cancellation?.(); // stop any sample that's currently playing
+      console.log("Login response:", response);
 
-        if (resp.data.data.asset) {
-          console.log("Sample found:", resp.data.data.asset);
-          // Single sample found
-          setResults([resp.data.data.asset]);
-          setResultCount(1);
-          setCurrentPage(1);
-          setTotalPages(1);
+      if (response.ok && response.data) {
+        const data = response.data as LoginResponse;
+        // console.log("Login data:", data);
 
-          // Clear constraints for single sample view
-          setKnownGenres([]);
-          setKnownInstruments([]);
+        // Extract token from headers (common places for JWT tokens)
+        let token = null;
+
+        // Check for token in response headers
+        if (response.headers) {
+          token =
+            response.headers["authorization"] ||
+            response.headers["x-auth-token"] ||
+            response.headers["x-access-token"] ||
+            response.headers["set-cookie"];
+        }
+
+        // If no token in headers, check response body
+        if (!token && data) {
+          token =
+            data.token ||
+            data.accessToken ||
+            data.access_token ||
+            data.authToken;
+        }
+
+        if (token) {
+          // Get expiration time from JWT token itself
+          const jwtExpiration = getTokenExpiration(token);
+          let expiryTime: number;
+
+          if (jwtExpiration) {
+            // Use JWT's built-in expiration
+            expiryTime = jwtExpiration;
+            // console.log("Using JWT expiration time:", new Date(jwtExpiration));
+          } else {
+            // Fallback: set expiration time (10 seconds for testing, 12 hours for production)
+            expiryTime = Date.now() + 12 * 60 * 60 * 1000; // 12 hours
+            // For production use: expiryTime = Date.now() + 12 * 60 * 60 * 1000; // 12 hours
+            // console.log("JWT has no expiration, using fallback time");
+          }
+
+          // Store token and user info
+          setAuthToken(token);
+          setTokenExpiry(expiryTime);
+          setIsLogin(true);
+
+          // Persist to localStorage
+          localStorage.setItem("authToken", token);
+          localStorage.setItem("tokenExpiry", expiryTime.toString());
+          localStorage.setItem("userInfo", JSON.stringify(data.user || data));
+
+          // console.log("Login successful, token stored:", {
+          //   token: token.substring(0, 20) + "...", // Only log first 20 chars for security
+          //   expirationTime: new Date(expiryTime),
+          //   isJWTExpiration: !!jwtExpiration,
+          // });
         } else {
-          console.log("Sample not found");
-          // Sample not found
-          setResults([]);
-          setResultCount(0);
-          setCurrentPage(0);
-          setTotalPages(0);
+          // console.warn("Login successful but no token found in response");
+          //setIsLogin(true); // Still allow login even without token
         }
       } else {
-        console.log("Regular search mode");
-        // Regular search
-        const payload = createSearchRequest(newQuery);
-        payload.variables.sort = sortBy;
-        if (sortBy == "random") {
-          payload.variables.random_seed = Math.floor(
-            Math.random() * 10000000000
-          ).toString();
-        }
-
-        payload.variables.tags = tags.map((x) => x.uuid);
-
-        if (bpmType == "exact") {
-          payload.variables.bpm = bpm?.bpm;
-        } else {
-          payload.variables.min_bpm = bpm?.minBpm;
-          payload.variables.max_bpm = bpm?.maxBpm;
-        }
-
-        if (sampleType != "any") {
-          payload.variables.asset_category_slug = sampleType;
-        }
-
-        payload.variables.tags.push(...instruments);
-        payload.variables.tags.push(...genres);
-
-        payload.variables.chord_type = chordType ?? undefined;
-        payload.variables.key = musicKey ?? undefined;
-
-        payload.variables.page = resetPage ? 1 : currentPage;
-
-        const resp = await fetch<SpliceSearchResponse>(GRAPHQL_URL, {
-          method: "POST",
-          body: {
-            type: "Json",
-            payload,
-          },
-        });
-
-        pbCtx.cancellation?.(); // stop any sample that's currently playing
-
-        const data = resp.data.data.assetsSearch;
-
-        setResults(data.items);
-        setResultCount(data.response_metadata.records);
-
-        setCurrentPage(resetPage ? 1 : data.pagination_metadata.currentPage);
-        setTotalPages(data.pagination_metadata.totalPages);
-
-        function findConstraints(name: "Genre" | "Instrument") {
-          return data.tag_summary
-            .map((x) => x.tag)
-            .filter((x) => x.taxonomy.name == name)
-            .map((x) => ({ name: x.label, uuid: x.uuid }));
-        }
-
-        setKnownGenres(findConstraints("Genre"));
-        setKnownInstruments(findConstraints("Instrument"));
+        // console.error("Login failed:", response.status, response.data);
+        // Safely handle the error message
+        const errorData = response.data as LoginErrorResponse;
+        const errorMessage =
+          errorData?.error ||
+          errorData?.message ||
+          `Login failed with status ${response.status}`;
+        throw new Error(errorMessage);
       }
     } catch (error) {
-      console.error("Search failed:", error);
-      setResults([]);
-      setResultCount(0);
-      setCurrentPage(0);
-      setTotalPages(0);
-    } finally {
-      setSearchLoading(false);
+      console.error("Login error:", error);
+      throw error; // Re-throw to handle in LoginPage component
     }
-  }
-
+  };
   return (
-    <main className="flex flex-col gap-2 m-8 h-screen">
-      <Modal
-        size="3xl"
-        isDismissable={false}
-        hideCloseButton={!cfg().configured}
-        isOpen={settings.isOpen}
-        onOpenChange={settings.onOpenChange}
-      >
-        <SettingsModalContent />
-      </Modal>
-
-      <div className="flex gap-2">
-        <Input
-          type="text"
-          aria-label="Search for samples "
-          placeholder="Search for samples ..."
-          labelPlacement="outside"
-          variant="bordered"
-          value={query}
-          onKeyDown={handleSearchKeyDown}
-          onChange={handleSearchInput}
-          startContent={<SearchIcon className="w-6" />}
-        />
-
-        <Select
-          variant="bordered"
-          aria-label="Sort by"
-          selectedKeys={[sortBy]}
-          onChange={(e) => setSortBy(e.target.value as SpliceSortBy)}
-          startContent={
-            <span className="w-20 text-sm text-foreground-400">Sort by: </span>
-          }
-        >
-          <SelectItem key="relevance">Most relevant</SelectItem>
-          <SelectItem key="popularity">Most popular</SelectItem>
-          <SelectItem key="recency">Most recent</SelectItem>
-          <SelectItem key="random">Random</SelectItem>
-        </Select>
-
-        <Button
-          isIconOnly
-          variant="bordered"
-          aria-label="Settings"
-          onClick={settings.onOpen}
-        >
-          <WrenchIcon className="w-4" />
-        </Button>
-      </div>
-
-      <div className="flex gap-2">
-        <Select
-          placeholder="Instruments"
-          aria-label="Instruments"
-          variant="bordered"
-          selectionMode="multiple"
-          onOpenChange={ensureContraintsGathered}
-          selectedKeys={instruments}
-          onSelectionChange={(x) => setInstruments(x as Set<string>)}
-        >
-          {knownInstruments.map((x) => (
-            <SelectItem key={x.uuid}>{x.name}</SelectItem>
-          ))}
-        </Select>
-
-        <Select
-          placeholder="Genres"
-          aria-label="Genres"
-          variant="bordered"
-          selectionMode="multiple"
-          onOpenChange={ensureContraintsGathered}
-          selectedKeys={genres}
-          onSelectionChange={(x) => setGenres(x as Set<string>)}
-        >
-          {knownGenres.map((x) => (
-            <SelectItem key={x.uuid}>{x.name}</SelectItem>
-          ))}
-        </Select>
-
-        <Select
-          placeholder="Tags"
-          aria-label="Tags"
-          variant="bordered"
-          selectionMode="multiple"
-          selectedKeys={Array.from(tags).map((x) => x.uuid)}
-          onSelectionChange={(x) => updateTagState(x as Set<string>)}
-          className="w-1/2"
-        >
-          {Array.from(tags).map((x) => (
-            <SelectItem key={x.uuid}>{x.label}</SelectItem>
-          ))}
-        </Select>
-
-        <Popover placement="bottom" showArrow={true}>
-          <PopoverTrigger>
-            <Button
-              variant="bordered"
-              className="w-96"
-              endContent={<ChevronDownIcon />}
-            >
-              {musicKey == null && chordType == null
-                ? "Key"
-                : `${musicKey ?? ""}${
-                    chordType == null
-                      ? ""
-                      : chordType == "major"
-                      ? " Major"
-                      : " Minor"
-                  }`}
-            </Button>
-          </PopoverTrigger>
-
-          <PopoverContent className="flex p-8 ">
-            <KeyScaleSelection
-              onChordSet={setChordType}
-              onKeySet={setMusicKey}
-              selectedChord={chordType}
-              selectedKey={musicKey}
-            />
-          </PopoverContent>
-        </Popover>
-
-        <Popover placement="bottom" showArrow={true}>
-          <PopoverTrigger>
-            <Button
-              variant="bordered"
-              className="w-96"
-              endContent={<ChevronDownIcon />}
-            >
-              {bpmType == "exact" && bpm?.bpm
-                ? `${bpm?.bpm} BPM`
-                : bpmType == "range" && bpm?.maxBpm && bpm.minBpm
-                ? `${bpm.minBpm} - ${bpm.maxBpm} BPM`
-                : "BPM"}
-            </Button>
-          </PopoverTrigger>
-
-          <PopoverContent className="p-8 flex items-start justify-start">
-            <RadioGroup defaultValue="exact" value={bpmType}>
-              <Radio value="exact" onChange={() => setBpmType("exact")}>
-                Exact
-              </Radio>
-              <Radio value="range" onChange={() => setBpmType("range")}>
-                Range
-              </Radio>
-            </RadioGroup>
-
-            <br />
-
-            {bpmType == "exact" ? (
-              <div>
-                <Input
-                  type="number"
-                  variant="bordered"
-                  label="BPM"
-                  labelPlacement="outside"
-                  placeholder="(tempo)"
-                  onChange={(e) => setBpm({ ...bpm, bpm: e.target.value })}
-                  value={bpm?.bpm?.toString() ?? ""}
-                />
-              </div>
-            ) : (
-              <div className="flex flex-col align-middle justify-center items-center gap-2">
-                <Input
-                  type="number"
-                  variant="bordered"
-                  label="Minimum"
-                  labelPlacement="outside"
-                  endContent="BPM"
-                  placeholder="(tempo)"
-                  onChange={(e) =>
-                    setBpm({ ...bpm, minBpm: parseInt(e.target.value) })
-                  }
-                  value={bpm?.minBpm?.toString() ?? ""}
-                />
-
-                <div className="align-middle">to</div>
-
-                <Input
-                  type="number"
-                  variant="bordered"
-                  label="Maximum"
-                  labelPlacement="outside"
-                  endContent="BPM"
-                  placeholder="(tempo)"
-                  onChange={(e) =>
-                    setBpm({ ...bpm, maxBpm: parseInt(e.target.value) })
-                  }
-                  value={bpm?.maxBpm?.toString() ?? ""}
-                />
-              </div>
-            )}
-          </PopoverContent>
-        </Popover>
-
-        <Select
-          aria-label="Type"
-          selectedKeys={[sampleType]}
-          onChange={(e) => setSampleType(e.target.value as SpliceSampleType)}
-          variant="bordered"
-          className="max-w-32"
-        >
-          <SelectItem key="any">Any</SelectItem>
-          <SelectItem key="oneshot">One-Shots</SelectItem>
-          <SelectItem key="loop">Loops</SelectItem>
-        </Select>
-      </div>
-
-      {query.length > 0 && results ? (
-        results.length == 0 ? (
-          <div className="flex flex-col items-center h-full justify-center space-y-6">
-            <img className="w-12" src="img/blob-think.png" />
-            <p className="text-foreground-400">
-              Couldn't find anything. Try changing your query and filters.
-            </p>
-          </div>
-        ) : (
-          <div
-            ref={resultContainer}
-            className="my-4 mb-16 overflow-y-scroll shadow-small bg-content1 p-8 rounded flex flex-col gap-8"
-          >
-            <div className="flex justify-between">
-              <div className="space-y-1">
-                <h4 className="text-medium font-medium">Samples</h4>
-                <p className="text-small text-default-400">
-                  Found {resultCount} sample{results.length != 1 ? "s" : ""} in
-                  total.
-                </p>
-              </div>
-
-              <div>
-                {" "}
-                {searchLoading && (
-                  <CircularProgress aria-label="Loading results..." />
-                )}{" "}
-              </div>
-            </div>
-
-            <div className="flex-1 flex flex-col">
-              {results.map((x) => (
-                <SampleListEntry
-                  key={x.uuid}
-                  sample={x}
-                  onTagClick={handleTagClick}
-                  ctx={pbCtx}
-                />
-              ))}
-            </div>
-
-            <div className="w-full flex justify-center">
-              <Pagination
-                variant="bordered"
-                total={totalPages}
-                page={currentPage}
-                onChange={changePage}
-              />
-            </div>
-          </div>
-        )
-      ) : (
-        <div className="flex flex-col items-center h-full justify-center space-y-6">
-          <img className="w-12" src="img/blob-salute.png" />
-          <p className="text-foreground-400">Waiting for your command!</p>
+    <>
+      {isLogin ? (
+        <div className="min-h-screen bg-gradient-to-br from-slate-950 via-slate-900 to-slate-800 flex items-center justify-center  relative">
+          <AuthenticatedApp />
         </div>
+      ) : (
+        <LoginPage onLogin={onLogin} />
       )}
-    </main>
+    </>
   );
 }
 

@@ -16,12 +16,7 @@ import { useState } from "react";
 import { startDrag } from "@crabnebula/tauri-plugin-drag";
 
 import * as wav from "node-wav";
-import {
-  checkFileExists,
-  createPlaceholder,
-  writeSampleFile,
-  downloadFile,
-} from "../../native";
+import { createPlaceholder, downloadFile } from "../../native";
 import { path, fs } from "@tauri-apps/api";
 import { downloadDir } from "@tauri-apps/api/path";
 
@@ -52,6 +47,7 @@ export default function SampleListEntry({
   const [playing, setPlaying] = useState(false);
   const [downloading, setDownloading] = useState(false);
   const [downloadSuccess, setDownloadSuccess] = useState(false);
+  const [isDragging, setIsDragging] = useState(false);
   const audio = document.createElement("audio");
 
   const pack = sample.parents.items[0];
@@ -137,7 +133,7 @@ export default function SampleListEntry({
       const nameWithoutExtension = baseSampleName.replace(/\.wav$/i, "");
       const cleanFileName = `${sanitizePath(pack.name)} - ${sanitizePath(
         nameWithoutExtension
-      )}`;
+      )}.wav`;
 
       console.log("Base sample name:", baseSampleName);
       console.log("Clean filename:", cleanFileName);
@@ -213,7 +209,7 @@ export default function SampleListEntry({
     }
   }
 
-  const sanitizePath = (x: string) => x.replace(/[<>:"|?* ]/g, "_");
+  const sanitizePath = (x: string) => x.replace(/[<>:"|?*\/\\]/g, "_");
 
   async function handleDrag(ev: React.MouseEvent<HTMLDivElement, MouseEvent>) {
     // Verify that the parent of the element that we began the dragging from
@@ -226,79 +222,112 @@ export default function SampleListEntry({
       return;
     }
 
-    const samplePath =
-      sanitizePath(pack.name) + "/" + sanitizePath(sample.name);
-
-    const dragParams = {
-      item: [await path.join(cfg().sampleDir, samplePath)],
-      icon: "",
-    };
-
+    setIsDragging(true);
     setFgLoading(true);
     await ensureAudioDecoded();
 
-    if (!(await checkFileExists(cfg().sampleDir, samplePath))) {
-      if (cfg().placeholders) {
-        await createPlaceholder(cfg().sampleDir, samplePath);
-        startDrag(dragParams);
-      }
+    try {
+      // Create a clean filename exactly like handleDownload
+      const baseSampleName = sample.name.split("/").pop() || sample.name;
+      const nameWithoutExtension = baseSampleName.replace(/\.wav$/i, "");
+      const cleanFileName = `${sanitizePath(pack.name)} - ${sanitizePath(
+        nameWithoutExtension
+      )}.wav`;
 
-      const actx = new AudioContext();
+      // Use the configured sample directory directly (no subfolders)
+      const filePath = await path.join(cfg().sampleDir, cleanFileName);
 
-      const audioBuffer =
-        decodedSample!.buffer instanceof ArrayBuffer
-          ? decodedSample!.buffer
-          : new ArrayBuffer(decodedSample!.buffer.byteLength);
-      const samples = await actx.decodeAudioData(audioBuffer);
-      const channels: Float32Array[] = [];
+      const dragParams = {
+        item: [filePath],
+        icon: "",
+      };
 
-      if (samples.length < 60 * 44100) {
-        for (let i = 0; i < samples.numberOfChannels; i++) {
-          const chan = samples.getChannelData(i);
-
-          const start = 1200;
-          const end = (sample.duration / 1000) * samples.sampleRate + start;
-
-          channels.push(chan.subarray(start, end));
+      // Check if file already exists in the target location
+      if (!(await fs.exists(filePath))) {
+        if (cfg().placeholders) {
+          await createPlaceholder(cfg().sampleDir, cleanFileName);
+          startDrag(dragParams);
         }
-      } else {
-        // processing big samples may result in memory allocation errors (it sure did for me!!)
-        console.warn(
-          `big boi detected of ${samples.length} samples - not pre-processing!`
-        );
-      }
 
-      await writeSampleFile(
-        cfg().sampleDir,
-        samplePath,
-        (wav.encode as any)(channels, {
+        console.log("Processing audio for drag...");
+        const actx = new AudioContext();
+
+        const audioBuffer =
+          decodedSample!.buffer instanceof ArrayBuffer
+            ? decodedSample!.buffer
+            : new ArrayBuffer(decodedSample!.buffer.byteLength);
+        const samples = await actx.decodeAudioData(audioBuffer);
+        const channels: Float32Array[] = [];
+
+        if (samples.length < 60 * 44100) {
+          for (let i = 0; i < samples.numberOfChannels; i++) {
+            const chan = samples.getChannelData(i);
+            const start = 1200;
+            const end = (sample.duration / 1000) * samples.sampleRate + start;
+            channels.push(chan.subarray(start, end));
+          }
+        } else {
+          console.warn(
+            `Large sample detected of ${samples.length} samples - not pre-processing!`
+          );
+          for (let i = 0; i < samples.numberOfChannels; i++) {
+            channels.push(samples.getChannelData(i));
+          }
+        }
+
+        console.log("Encoding to WAV for drag...");
+        // Encode as WAV exactly like handleDownload
+        const wavBuffer = (wav.encode as any)(channels, {
           bitDepth: 16,
           sampleRate: samples.sampleRate,
-        })
-      );
+        });
 
-      if (!cfg().placeholders) {
+        console.log("Saving file for drag...");
+        // Use downloadFile instead of writeSampleFile to avoid subfolder creation
+        await downloadFile(
+          cfg().sampleDir,
+          cleanFileName,
+          Buffer.from(wavBuffer)
+        );
+        console.log("File saved successfully for drag!");
+
+        if (!cfg().placeholders) {
+          startDrag(dragParams);
+        }
+      } else {
+        console.log("File already exists, starting drag...");
         startDrag(dragParams);
       }
-
+    } catch (error) {
+      console.error("Drag preparation failed:", error);
+    } finally {
       setFgLoading(false);
-    } else {
-      setFgLoading(false);
-      startDrag(dragParams);
+      // Keep dragging state until the drag operation is complete
+      // We'll reset it after a short delay to allow the drag to complete
+      setTimeout(() => setIsDragging(false), 100);
     }
   }
 
   return (
     <div
       onMouseOver={startFetching}
-      className={`flex w-full px-4 py-2 gap-8 rounded transition-background
-                    items-center hover:bg-foreground-100 cursor-grab select-none`}
+      className={`flex w-full px-2 sm:px-4 py-2 gap-2 sm:gap-8 rounded transition-background
+                    items-center hover:bg-slate-700/50 select-none overflow-hidden ${
+                      isDragging
+                        ? "cursor-grabbing"
+                        : fgLoading && !isDragging
+                        ? "cursor-wait"
+                        : "cursor-grab"
+                    }`}
     >
-      {/* when loading, set the cursor for everything to a waiting icon */}
-      {fgLoading && <style> {`* { cursor: wait }`} </style>}
+      {/* Dynamic cursor styles based on current state */}
+      {isDragging && <style> {`* { cursor: grabbing !important; }`} </style>}
+      {fgLoading && !isDragging && (
+        <style> {`* { cursor: wait !important; }`} </style>
+      )}
 
       {/* sample pack */}
-      <div className="flex gap-4 min-w-20">
+      <div className="flex gap-2 sm:gap-4 min-w-16 sm:min-w-20 shrink-0">
         <Tooltip
           content={
             <div className="flex flex-col gap-2 p-4">
@@ -316,16 +345,22 @@ export default function SampleListEntry({
             href={`https://splice.com/sounds/labels/${pack.permalink_base_url}`}
             target="_blank"
           >
-            <img src={packCover} alt={pack.name} width={32} height={32} />
+            <img
+              src={packCover}
+              alt={pack.name}
+              width={32}
+              height={32}
+              className="w-6 h-6 sm:w-8 sm:h-8"
+            />
           </a>
         </Tooltip>
 
-        <div className="flex gap-2">
-          <div onClick={handlePlayClick} className="cursor-pointer w-8">
+        <div className="flex gap-1 sm:gap-2">
+          <div onClick={handlePlayClick} className="cursor-pointer w-6 sm:w-8">
             {fgLoading ? (
               <CircularProgress
                 aria-label="Loading sample..."
-                className="h-8"
+                className="h-6 sm:h-8"
               />
             ) : playing ? (
               <StopIcon />
@@ -341,13 +376,16 @@ export default function SampleListEntry({
           >
             <div
               onClick={handleDownload}
-              className={`cursor-pointer w-8 transition-colors ${
+              className={`cursor-pointer w-6 sm:w-8 transition-colors ${
                 downloadSuccess ? "text-green-500" : ""
               }`}
               data-draggable="false"
             >
               {downloading ? (
-                <CircularProgress aria-label="Downloading..." className="h-8" />
+                <CircularProgress
+                  aria-label="Downloading..."
+                  className="h-6 sm:h-8"
+                />
               ) : downloadSuccess ? (
                 <CheckIcon />
               ) : (
@@ -359,15 +397,15 @@ export default function SampleListEntry({
       </div>
 
       {/* sample name + tags */}
-      <div className="grow" onMouseDown={handleDrag}>
-        <div className="flex gap-1 max-w-[50vw] overflow-clip">
-          {sample.name.split("/").pop()}
-          <div className="text-foreground-400">
+      <div className="flex-1 min-w-0" onMouseDown={handleDrag}>
+        <div className="flex gap-1 truncate text-sm sm:text-base">
+          <span className="truncate">{sample.name.split("/").pop()}</span>
+          <span className="text-foreground-400 shrink-0">
             ({sample.asset_category_slug})
-          </div>
+          </span>
         </div>
 
-        <div className="flex gap-1">
+        <div className="flex gap-1 overflow-x-auto pb-1 scrollbar-hide">
           {sample.tags.map((x) => (
             <Chip
               key={x.uuid}
@@ -375,6 +413,7 @@ export default function SampleListEntry({
               style={{ cursor: "pointer" }}
               onClick={() => onTagClick(x)}
               data-draggable="false"
+              className="shrink-0 text-xs"
             >
               {x.label}
             </Chip>
@@ -383,10 +422,13 @@ export default function SampleListEntry({
       </div>
 
       {/* other metadata */}
-      <div className="flex gap-8" onMouseDown={handleDrag}>
+      <div
+        className="hidden sm:flex gap-4 lg:gap-8 shrink-0"
+        onMouseDown={handleDrag}
+      >
         {sample.key != null ? (
-          <div className="flex items-center gap-2 font-semibold text-foreground-500">
-            <MusicalNoteIcon className="w-4" />
+          <div className="flex items-center gap-2 font-semibold text-foreground-500 text-sm">
+            <MusicalNoteIcon className="w-3 lg:w-4" />
             <span>{`${sample.key.toUpperCase()}${getChordTypeDisplay(
               sample.chord_type
             )}`}</span>
@@ -395,13 +437,13 @@ export default function SampleListEntry({
           <></>
         )}
 
-        <div className="flex items-center gap-2 font-semibold text-foreground-500">
+        <div className="flex items-center gap-2 font-semibold text-foreground-500 text-sm">
           <ClockCircleLinearIcon />
           <span>{`${(sample.duration / 1000).toFixed(2)}s`}</span>
         </div>
 
         {sample.bpm != null ? (
-          <div className="flex items-center gap-2 font-semibold text-foreground-500">
+          <div className="flex items-center gap-2 font-semibold text-foreground-500 text-sm">
             <ClockSquareBoldIcon />
             <span>{`${sample.bpm} BPM`}</span>
           </div>

@@ -4,15 +4,25 @@ use std::path::PathBuf;
 
 #[tauri::command]
 pub async fn download_file(base_dir: String, relative_path: String, buffer: Vec<u8>) -> Result<(), String> {
-    let mut full_path = PathBuf::from(base_dir);
-    full_path.push(relative_path);
-
-    if let Some(parent_dir) = full_path.parent() {
-        if let Err(e) = fs::create_dir_all(parent_dir) {
-            return Err(format!("Failed to create directories for {full_path:#?}: {e}"));
-        }
-    } else {
-        return Err("Failed to determine parent directory".into());
+    let base_path = PathBuf::from(base_dir);
+    
+    // Ensure the base directory exists
+    if let Err(e) = fs::create_dir_all(&base_path) {
+        return Err(format!("Failed to create base directory {base_path:#?}: {e}"));
+    }
+    
+    // Clean the filename to remove any path separators
+    let clean_filename = relative_path
+        .replace('/', "_")
+        .replace('\\', "_")
+        .replace("..", "_");
+    
+    // Directly join the clean filename to the base directory
+    let full_path = base_path.join(clean_filename);
+    
+    // Make sure we're not trying to write outside the base directory
+    if !full_path.starts_with(&base_path) {
+        return Err("Invalid path: file would be written outside base directory".into());
     }
 
     match File::create(&full_path) {
