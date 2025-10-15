@@ -66,6 +66,9 @@
         "icons/128x128.png",
         "icons/256x256.png",
         "icons/512x512.png",
+        "icons/128x128.icns",
+        "icons/256x256.icns",
+        "icons/512x512.icns",
         "icons/256x256.ico"
       ]
     }
