@@ -1,40 +1,38 @@
-name: Build Multi-Platform
+name: Build macOS App
 
 on:
   push:
-    branches: [main, master]
+    branches:
+      - master
   pull_request:
-    branches: [main, master]
 
 jobs:
   build:
-    strategy:
-      matrix:
-        os: [windows-latest, macos-latest, ubuntu-latest]
-
-    runs-on: ${{ matrix.os }}
+    runs-on: macos-latest
 
     steps:
-      - uses: actions/checkout@v3
+      - name: Checkout code
+        uses: actions/checkout@v3
 
-      - name: Setup Node.js
+      - name: Set up Node.js
         uses: actions/setup-node@v3
         with:
-          node-version: "18"
+          node-version: 16
 
       - name: Install Rust
-        uses: dtolnay/rust-toolchain@stable
+        run: |
+          curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
+          source $HOME/.cargo/env
+          rustup target add aarch64-apple-darwin x86_64-apple-darwin
 
       - name: Install dependencies
-        run: npm install
+        run: yarn install
 
       - name: Build Tauri app
-        run: npm run tauri build
+        run: yarn tauri build
 
-      - name: Upload artifacts
-        uses: actions/upload-artifact@v3
+      - name: Upload macOS build artifact
+        uses: actions/upload-artifact@v4
         with:
-          name: app-${{ matrix.os }}
-          path: |
-            src-tauri/target/release/bundle/
-            !src-tauri/target/release/bundle/**/deps/
+          name: macos-build
+          path: src-tauri/target/release/bundle/dmg/
